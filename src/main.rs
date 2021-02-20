@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 
 use binance::websockets::*;
-use colored::*;
 use structopt::StructOpt;
 use thiserror::Error;
+
+mod colors;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -25,7 +26,7 @@ fn main() -> Result<(), Error> {
     let keep_running = AtomicBool::new(true); // Used to control the event loop
     let agg_trade: String = format!("!ticker@arr"); // All Symbols
 
-    let interested = vec!["BTCEUR", "BTCUSDT", "BTCBRL", "ADAEUR", "BNBEUR"];
+    let interested = vec!["BTCEUR", "BTCUSD", "BTCBRL", "ADAEUR", "BNBEUR"];
 
     let mut averages: HashMap<String, (f32, f32)> = HashMap::new();
 
@@ -54,18 +55,6 @@ fn main() -> Result<(), Error> {
 
                     let formatted_change = format!("{:.1}%", change);
 
-                    let green = if args.polybar_mode {
-                        format!("%{{F#50fa7b}}{}%{{F-}}", formatted_change)
-                    } else {
-                        formatted_change.green().to_string()
-                    };
-
-                    let red = if args.polybar_mode {
-                        format!("%{{F#ff5555}}{}%{{F-}}", formatted_change)
-                    } else {
-                        formatted_change.red().to_string()
-                    };
-
                     let size = match ticker.len() {
                         6 => 3,
                         7 => 4,
@@ -84,15 +73,15 @@ fn main() -> Result<(), Error> {
                     };
 
                     print!(
-                        "{}: {} ({}) ",
-                        &ticker[..size],
+                        "{} {} ({}) ",
+                        colors::title(&ticker[..size], args.polybar_mode),
                         average_with_unit,
                         match change.partial_cmp(&0.0) {
-                            Some(cmp) => match cmp {
-                                Ordering::Equal => formatted_change,
-                                Ordering::Greater => green,
-                                Ordering::Less => red,
-                            },
+                            Some(Ordering::Greater) =>
+                                colors::green(formatted_change, args.polybar_mode),
+                            Some(Ordering::Less) =>
+                                colors::red(formatted_change, args.polybar_mode),
+                            Some(Ordering::Equal) => formatted_change,
                             None => formatted_change,
                         }
                     );
