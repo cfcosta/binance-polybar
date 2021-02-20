@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 
 use binance::websockets::*;
 use colored::*;
+use structopt::StructOpt;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -12,65 +13,89 @@ pub enum Error {
     ApiError(#[from] binance::errors::Error),
 }
 
-pub struct Pair<'t>(&'t str);
+#[derive(Debug, StructOpt)]
+pub struct Arguments {
+    #[structopt(long = "polybar-mode", short = "p")]
+    /// Outputs colors using polybar format strings
+    polybar_mode: bool,
+}
 
 fn main() -> Result<(), Error> {
+    let args = Arguments::from_args();
     let keep_running = AtomicBool::new(true); // Used to control the event loop
     let agg_trade: String = format!("!ticker@arr"); // All Symbols
 
-    let interested = vec![
-        Pair("ADAEUR"),
-        Pair("BTCEUR"),
-        Pair("DOTEUR"),
-        Pair("CAKEBNB"),
-        Pair("BNBEUR"),
-    ];
+    let interested = vec!["BTCEUR", "BTCUSDT", "BTCBRL", "ADAEUR", "BNBEUR"];
 
-    let mut averages: HashMap<String, f32> = HashMap::new();
-    let mut current: HashMap<String, f32> = HashMap::new();
-    let samples_to_average = 5.0;
+    let mut averages: HashMap<String, (f32, f32)> = HashMap::new();
 
     let mut web_socket: WebSockets = WebSockets::new(|event: WebsocketEvent| {
         match event {
             // 24hr rolling window ticker statistics for all symbols that changed in an array.
             WebsocketEvent::DayTickerAll(ticker_events) => {
                 for tick_event in ticker_events {
-                    if interested.iter().any(|x| tick_event.symbol == x.0) {
-                        let average =
-                            (1000.0 * tick_event.average_price.parse::<f32>()?).round() / 1000.0;
-                        current
+                    if interested.iter().any(|&x| tick_event.symbol == x) {
+                        let (average, change) = (
+                            tick_event.average_price.parse::<f32>()?,
+                            tick_event.price_change_percent.parse::<f32>()?,
+                        );
+                        averages
                             .entry(tick_event.symbol.clone())
-                            .and_modify(|x| *x = average)
-                            .or_insert(average);
+                            .and_modify(|x| *x = (average, change))
+                            .or_insert((average, change));
                     }
                 }
 
                 for ticker in interested.iter() {
-                    let average = match current.get(&ticker.0.to_string()) {
+                    let (average, change) = match averages.get(&ticker.to_string()) {
                         Some(val) => val,
                         None => continue,
                     };
-                    let old_average = averages.get(&ticker.0.to_string()).unwrap_or(&average);
+
+                    let formatted_change = format!("{:.1}%", change);
+
+                    let green = if args.polybar_mode {
+                        format!("%{{F#50fa7b}}{}%{{F-}}", formatted_change)
+                    } else {
+                        formatted_change.green().to_string()
+                    };
+
+                    let red = if args.polybar_mode {
+                        format!("%{{F#ff5555}}{}%{{F-}}", formatted_change)
+                    } else {
+                        formatted_change.red().to_string()
+                    };
+
+                    let size = match ticker.len() {
+                        6 => 3,
+                        7 => 4,
+                        8 => 4,
+                        _ => 3,
+                    };
+
+                    let average_with_unit = if ticker.contains("EUR") {
+                        format!("€{:.2}", average)
+                    } else if ticker.contains("USD") {
+                        format!("${:.2}", average)
+                    } else if ticker.contains("BRL") {
+                        format!("R${:.2}", average)
+                    } else {
+                        format!("{:.2} {}", average, &ticker[size..ticker.len()])
+                    };
 
                     print!(
-                        "{}: {} ",
-                        ticker.0,
-                        match average.partial_cmp(old_average) {
+                        "{}: {} ({}) ",
+                        &ticker[..size],
+                        average_with_unit,
+                        match change.partial_cmp(&0.0) {
                             Some(cmp) => match cmp {
-                                Ordering::Equal => format!("%{{F#e6e6e6}}{:.3}%{{F-}}", average),
-                                Ordering::Greater => format!("%{{F#50fa7b}}{:.3}%{{F-}}", average),
-                                Ordering::Less => format!("%{{F#ff5555}}{:.3}%{{F-}}", average),
+                                Ordering::Equal => formatted_change,
+                                Ordering::Greater => green,
+                                Ordering::Less => red,
                             },
-                            None => format!("%{{F#e6e6e6}}{:.3}%{{F-}}", average),
+                            None => formatted_change,
                         }
                     );
-
-                    averages
-                        .entry(ticker.0.to_string())
-                        .and_modify(|x| {
-                            *x = *x + ((average - *x) / 2.0).round();
-                        })
-                        .or_insert(*average);
                 }
 
                 println!("");
