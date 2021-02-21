@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 
 use binance::websockets::*;
+use indexmap::IndexMap;
 use structopt::StructOpt;
 use thiserror::Error;
 
@@ -30,50 +30,78 @@ pub struct Ticker {
 
 impl Ticker {
     pub fn title(&self) -> String {
-        let size = match self.name.len() {
+        let mut size = match self.name.len() {
             6 => 3,
             7 => 4,
             8 => 4,
             _ => 3,
         };
+
+        // Fix a bad corner case until we actually identify the correct tokens
+        // with flags.
+        if self.name.contains("USDT") || self.name.contains("USDC") {
+            size -= 1;
+        }
 
         self.name[..size].to_string()
     }
 
     pub fn average_with_unit(&self) -> String {
-        let size = match self.name.len() {
-            6 => 3,
-            7 => 4,
-            8 => 4,
-            _ => 3,
+        let avg = if self.average < 0.01 {
+            format!("{:.4}", self.average)
+        } else {
+            format!("{:.2}", self.average)
         };
 
         if self.name.contains("EUR") {
-            format!("€{:.2}", self.average)
+            format!("€{}", avg)
         } else if self.name.contains("USD") {
-            format!("${:.2}", self.average)
+            format!("${}", avg)
         } else if self.name.contains("BRL") {
-            format!("R${:.2}", self.average)
+            format!("R${}", avg)
         } else {
-            format!("{:.2} {}", self.average, &self.name[size..self.name.len()])
+            format!("{} {}", avg, self.title())
         }
     }
 }
 
-fn display(ticker: &Ticker, args: &Arguments) -> String {
-    let formatted_change = format!("{:.1}%", ticker.change);
+fn display(tickers: &Vec<Ticker>, args: &Arguments) -> String {
+    if tickers.len() > 1 {
+        let mut output = colors::title(tickers.get(0).unwrap().title(), args.polybar_mode);
+        output.push(' ');
 
-    format!(
-        "{} {} ({}) ",
-        colors::title(ticker.title(), args.polybar_mode),
-        ticker.average_with_unit(),
-        match ticker.change.partial_cmp(&0.0) {
-            Some(Ordering::Greater) => colors::green(formatted_change, args.polybar_mode),
-            Some(Ordering::Less) => colors::red(formatted_change, args.polybar_mode),
-            Some(Ordering::Equal) => formatted_change,
-            None => formatted_change,
+        for ticker in tickers {
+            let formatted_change = format!("{:.1}%", ticker.change);
+
+            output.push_str(&*format!(
+                "{} ({}) ",
+                ticker.average_with_unit(),
+                match ticker.change.partial_cmp(&0.0) {
+                    Some(Ordering::Greater) => colors::green(formatted_change, args.polybar_mode),
+                    Some(Ordering::Less) => colors::red(formatted_change, args.polybar_mode),
+                    Some(Ordering::Equal) => formatted_change,
+                    None => formatted_change,
+                }
+            ));
         }
-    )
+
+        output
+    } else {
+        let ticker = tickers.get(0).unwrap();
+        let formatted_change = format!("{:.1}%", ticker.change);
+
+        format!(
+            "{} {} ({}) ",
+            colors::title(ticker.title(), args.polybar_mode),
+            ticker.average_with_unit(),
+            match ticker.change.partial_cmp(&0.0) {
+                Some(Ordering::Greater) => colors::green(formatted_change, args.polybar_mode),
+                Some(Ordering::Less) => colors::red(formatted_change, args.polybar_mode),
+                Some(Ordering::Equal) => formatted_change,
+                None => formatted_change,
+            }
+        )
+    }
 }
 
 fn main() -> Result<(), Error> {
@@ -81,14 +109,16 @@ fn main() -> Result<(), Error> {
     let keep_running = AtomicBool::new(true); // Used to control the event loop
     let agg_trade: String = format!("!ticker@arr"); // All Symbols
 
-    let interested = vec!["BTCEUR", "BTCUSD", "BTCBRL", "ADAEUR", "ADABNB", "BNBEUR"];
-
-    let mut averages: HashMap<String, Ticker> = HashMap::new();
+    let interested = vec![
+        "BTCEUR", "BTCUSDT", "BTCBRL", "ADAEUR", "ADABNB", "BNBEUR", "BNBBTC",
+    ];
 
     let mut web_socket: WebSockets = WebSockets::new(|event: WebsocketEvent| {
         match event {
             // 24hr rolling window ticker statistics for all symbols that changed in an array.
             WebsocketEvent::DayTickerAll(ticker_events) => {
+                let mut averages: IndexMap<String, Vec<Ticker>> = IndexMap::new();
+
                 for tick_event in ticker_events {
                     if interested.iter().any(|&x| tick_event.symbol.clone() == x) {
                         let (average, change) = (
@@ -101,19 +131,14 @@ fn main() -> Result<(), Error> {
                             change,
                         };
                         averages
-                            .entry(tick_event.clone().symbol)
-                            .and_modify(|x| *x = ticker.clone())
-                            .or_insert(ticker);
+                            .entry(ticker.title())
+                            .and_modify(|x| x.push(ticker.clone()))
+                            .or_insert(vec![ticker]);
                     }
                 }
 
-                for ticker in interested.iter() {
-                    let ticker = match averages.get(&ticker.to_string()) {
-                        Some(val) => val,
-                        None => continue,
-                    };
-
-                    print!("{}", display(&ticker, &args));
+                for (_, tickers) in &averages {
+                    print!("{}", display(&tickers, &args));
                 }
 
                 println!("");
