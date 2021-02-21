@@ -81,7 +81,7 @@ fn main() -> Result<(), Error> {
     let keep_running = AtomicBool::new(true); // Used to control the event loop
     let agg_trade: String = format!("!ticker@arr"); // All Symbols
 
-    let interested = vec!["BTCEUR", "BTCUSD", "BTCBRL", "ADAEUR", "BNBEUR"];
+    let interested = vec!["BTCEUR", "BTCUSD", "BTCBRL", "ADAEUR", "ADABNB", "BNBEUR"];
 
     let mut averages: HashMap<String, Ticker> = HashMap::new();
 
