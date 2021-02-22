@@ -127,10 +127,10 @@ fn main() -> Result<(), Error> {
         ExchangeTicker::new("BTCUSDT", "BTC", "USD"),
         ExchangeTicker::new("BTCBRL", "BTC", "BRL"),
         ExchangeTicker::new("ADAEUR", "ADA", "EUR"),
-        ExchangeTicker::new("ADAUSD", "ADA", "USD"),
+        ExchangeTicker::new("ADAUSDT", "ADA", "USD"),
         ExchangeTicker::new("ADABTC", "ADA", "BTC"),
         ExchangeTicker::new("DOTEUR", "DOT", "EUR"),
-        ExchangeTicker::new("DOTUSD", "DOT", "USD"),
+        ExchangeTicker::new("DOTUSDT", "DOT", "USD"),
         ExchangeTicker::new("DOTBTC", "DOT", "BTC"),
     ];
 
