@@ -125,12 +125,14 @@ fn main() -> Result<(), Error> {
     config::create_if_not_exists(&args.config_file)?;
     let config = config::parse(&args.config_file)?;
 
+    let mut averages: IndexMap<String, Vec<Ticker>> = IndexMap::new();
+
     let mut web_socket: WebSockets = WebSockets::new(|event: WebsocketEvent| {
         match event {
             WebsocketEvent::DayTickerAll(ticker_events) => {
-                let mut averages: IndexMap<String, Vec<Ticker>> = IndexMap::new();
-
                 for tick_event in ticker_events {
+                    let symbol = tick_event.symbol.clone();
+
                     if let Some(parent) = config
                         .tickers
                         .iter()
@@ -146,9 +148,16 @@ fn main() -> Result<(), Error> {
                             average,
                             change,
                         };
+
                         averages
                             .entry(ticker.parent.from.clone())
-                            .and_modify(|x| x.push(ticker.clone()))
+                            .and_modify(|x| {
+                                if let Some(idx) = x.iter().position(|x| x.parent.name == symbol) {
+                                    x[idx] = ticker.clone();
+                                } else {
+                                    x.push(ticker.clone());
+                                }
+                            })
                             .or_insert(vec![ticker]);
                     }
                 }
