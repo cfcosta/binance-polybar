@@ -1,5 +1,4 @@
-use std::cmp::Ordering;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use binance::websockets::*;
 use indexmap::IndexMap;
@@ -19,55 +18,49 @@ pub struct Arguments {
     #[structopt(long = "polybar-mode", short = "p")]
     /// Outputs colors using polybar format strings
     polybar_mode: bool,
+
+    #[structopt(long = "one-line", short = "o")]
+    /// Prints one line and quits
+    one_line: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Ticker {
-    name: String,
+    parent: ExchangeTicker,
     average: f32,
     change: f32,
 }
 
 impl Ticker {
-    pub fn title(&self) -> String {
-        let mut size = match self.name.len() {
-            6 => 3,
-            7 => 4,
-            8 => 4,
-            _ => 3,
-        };
-
-        // Fix a bad corner case until we actually identify the correct tokens
-        // with flags.
-        if self.name.contains("USDT") || self.name.contains("USDC") {
-            size -= 1;
-        }
-
-        self.name[..size].to_string()
-    }
-
     pub fn average_with_unit(&self) -> String {
-        let avg = if self.average < 0.01 {
+        let avg = if self.average < 0.0001 {
+            format!("{:.6}", self.average)
+        } else if self.average < 0.01 {
             format!("{:.4}", self.average)
         } else {
             format!("{:.2}", self.average)
         };
 
-        if self.name.contains("EUR") {
+        let to = &self.parent.to;
+
+        if to.contains("EUR") {
             format!("€{}", avg)
-        } else if self.name.contains("USD") {
+        } else if to.contains("USD") {
             format!("${}", avg)
-        } else if self.name.contains("BRL") {
+        } else if to.contains("BRL") {
             format!("R${}", avg)
         } else {
-            format!("{} {}", avg, self.title())
+            format!("{} {}", avg, to)
         }
     }
 }
 
 fn display(tickers: &Vec<Ticker>, args: &Arguments) -> String {
     if tickers.len() > 1 {
-        let mut output = colors::title(tickers.get(0).unwrap().title(), args.polybar_mode);
+        let mut output = colors::title(
+            tickers.get(0).unwrap().clone().parent.from,
+            args.polybar_mode,
+        );
         output.push(' ');
 
         for ticker in tickers {
@@ -77,9 +70,11 @@ fn display(tickers: &Vec<Ticker>, args: &Arguments) -> String {
                 "{} ({}) ",
                 ticker.average_with_unit(),
                 match ticker.change.partial_cmp(&0.0) {
-                    Some(Ordering::Greater) => colors::green(formatted_change, args.polybar_mode),
-                    Some(Ordering::Less) => colors::red(formatted_change, args.polybar_mode),
-                    Some(Ordering::Equal) => formatted_change,
+                    Some(std::cmp::Ordering::Greater) =>
+                        colors::green(formatted_change, args.polybar_mode),
+                    Some(std::cmp::Ordering::Less) =>
+                        colors::red(formatted_change, args.polybar_mode),
+                    Some(std::cmp::Ordering::Equal) => formatted_change,
                     None => formatted_change,
                 }
             ));
@@ -92,15 +87,33 @@ fn display(tickers: &Vec<Ticker>, args: &Arguments) -> String {
 
         format!(
             "{} {} ({}) ",
-            colors::title(ticker.title(), args.polybar_mode),
+            colors::title(ticker.parent.clone().from, args.polybar_mode),
             ticker.average_with_unit(),
             match ticker.change.partial_cmp(&0.0) {
-                Some(Ordering::Greater) => colors::green(formatted_change, args.polybar_mode),
-                Some(Ordering::Less) => colors::red(formatted_change, args.polybar_mode),
-                Some(Ordering::Equal) => formatted_change,
+                Some(std::cmp::Ordering::Greater) =>
+                    colors::green(formatted_change, args.polybar_mode),
+                Some(std::cmp::Ordering::Less) => colors::red(formatted_change, args.polybar_mode),
+                Some(std::cmp::Ordering::Equal) => formatted_change,
                 None => formatted_change,
             }
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExchangeTicker {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+impl ExchangeTicker {
+    pub fn new<T: Into<String>>(name: T, from: T, to: T) -> Self {
+        Self {
+            name: name.into(),
+            from: from.into(),
+            to: to.into(),
+        }
     }
 }
 
@@ -110,28 +123,39 @@ fn main() -> Result<(), Error> {
     let agg_trade: String = format!("!ticker@arr"); // All Symbols
 
     let interested = vec![
-        "BTCEUR", "BTCUSDT", "BTCBRL", "ADAEUR", "ADABNB", "BNBEUR", "BNBBTC",
+        ExchangeTicker::new("BTCEUR", "BTC", "EUR"),
+        ExchangeTicker::new("BTCUSDT", "BTC", "USD"),
+        ExchangeTicker::new("BTCBRL", "BTC", "BRL"),
+        ExchangeTicker::new("ADAEUR", "ADA", "EUR"),
+        ExchangeTicker::new("ADAUSD", "ADA", "USD"),
+        ExchangeTicker::new("ADABTC", "ADA", "BTC"),
+        ExchangeTicker::new("DOTEUR", "DOT", "EUR"),
+        ExchangeTicker::new("DOTUSD", "DOT", "USD"),
+        ExchangeTicker::new("DOTBTC", "DOT", "BTC"),
     ];
 
     let mut web_socket: WebSockets = WebSockets::new(|event: WebsocketEvent| {
         match event {
-            // 24hr rolling window ticker statistics for all symbols that changed in an array.
             WebsocketEvent::DayTickerAll(ticker_events) => {
                 let mut averages: IndexMap<String, Vec<Ticker>> = IndexMap::new();
 
                 for tick_event in ticker_events {
-                    if interested.iter().any(|&x| tick_event.symbol.clone() == x) {
+                    if let Some(parent) = interested
+                        .iter()
+                        .find(|x| x.name == tick_event.symbol.clone())
+                    {
                         let (average, change) = (
                             tick_event.average_price.parse::<f32>()?,
                             tick_event.price_change_percent.parse::<f32>()?,
                         );
+
                         let ticker = Ticker {
-                            name: tick_event.symbol.clone(),
+                            parent: parent.clone(),
                             average,
                             change,
                         };
                         averages
-                            .entry(ticker.title())
+                            .entry(ticker.parent.from.clone())
                             .and_modify(|x| x.push(ticker.clone()))
                             .or_insert(vec![ticker]);
                     }
@@ -142,6 +166,10 @@ fn main() -> Result<(), Error> {
                 }
 
                 println!("");
+
+                if args.one_line {
+                    keep_running.store(false, Ordering::Relaxed);
+                }
             }
             _ => (),
         };
