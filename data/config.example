@@ -1,0 +1,4 @@
+[[tickers]]
+name = "BTCUSDT"
+from = "BTC"
+to = "USD"

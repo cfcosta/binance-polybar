@@ -6,11 +6,21 @@ use structopt::StructOpt;
 use thiserror::Error;
 
 mod colors;
+mod config;
 
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Binance API Error")]
     ApiError(#[from] binance::errors::Error),
+
+    #[error("I/O Error")]
+    IOError(#[from] std::io::Error),
+
+    #[error("Failed to expand path: {0}")]
+    PathExpansionError(String),
+
+    #[error("Failed to parse configuration file")]
+    ParseError,
 }
 
 #[derive(Debug, StructOpt)]
@@ -22,11 +32,19 @@ pub struct Arguments {
     #[structopt(long = "one-line", short = "o")]
     /// Prints one line and quits
     one_line: bool,
+
+    #[structopt(
+        long = "config-file",
+        short = "c",
+        default_value = "~/.config/binance-i3status/config.toml"
+    )]
+    /// Where to find the configuration file
+    config_file: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct Ticker {
-    parent: ExchangeTicker,
+    parent: config::Ticker,
     average: f32,
     change: f32,
 }
@@ -64,18 +82,17 @@ fn display(tickers: &Vec<Ticker>, args: &Arguments) -> String {
         output.push(' ');
 
         for ticker in tickers {
+            use std::cmp::Ordering::*;
+
             let formatted_change = format!("{:.1}%", ticker.change);
 
             output.push_str(&*format!(
                 "{} ({}) ",
                 ticker.average_with_unit(),
-                match ticker.change.partial_cmp(&0.0) {
-                    Some(std::cmp::Ordering::Greater) =>
-                        colors::green(formatted_change, args.polybar_mode),
-                    Some(std::cmp::Ordering::Less) =>
-                        colors::red(formatted_change, args.polybar_mode),
-                    Some(std::cmp::Ordering::Equal) => formatted_change,
-                    None => formatted_change,
+                match ticker.change.partial_cmp(&0.0).unwrap_or(Equal) {
+                    Greater => colors::green(formatted_change, args.polybar_mode),
+                    Less => colors::red(formatted_change, args.polybar_mode),
+                    Equal => formatted_change,
                 }
             ));
         }
@@ -100,39 +117,13 @@ fn display(tickers: &Vec<Ticker>, args: &Arguments) -> String {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ExchangeTicker {
-    pub name: String,
-    pub from: String,
-    pub to: String,
-}
-
-impl ExchangeTicker {
-    pub fn new<T: Into<String>>(name: T, from: T, to: T) -> Self {
-        Self {
-            name: name.into(),
-            from: from.into(),
-            to: to.into(),
-        }
-    }
-}
-
 fn main() -> Result<(), Error> {
     let args = Arguments::from_args();
     let keep_running = AtomicBool::new(true); // Used to control the event loop
     let agg_trade: String = format!("!ticker@arr"); // All Symbols
 
-    let interested = vec![
-        ExchangeTicker::new("BTCEUR", "BTC", "EUR"),
-        ExchangeTicker::new("BTCUSDT", "BTC", "USD"),
-        ExchangeTicker::new("BTCBRL", "BTC", "BRL"),
-        ExchangeTicker::new("ADAEUR", "ADA", "EUR"),
-        ExchangeTicker::new("ADAUSDT", "ADA", "USD"),
-        ExchangeTicker::new("ADABTC", "ADA", "BTC"),
-        ExchangeTicker::new("DOTEUR", "DOT", "EUR"),
-        ExchangeTicker::new("DOTUSDT", "DOT", "USD"),
-        ExchangeTicker::new("DOTBTC", "DOT", "BTC"),
-    ];
+    config::create_if_not_exists(&args.config_file)?;
+    let config = config::parse(&args.config_file)?;
 
     let mut web_socket: WebSockets = WebSockets::new(|event: WebsocketEvent| {
         match event {
@@ -140,7 +131,8 @@ fn main() -> Result<(), Error> {
                 let mut averages: IndexMap<String, Vec<Ticker>> = IndexMap::new();
 
                 for tick_event in ticker_events {
-                    if let Some(parent) = interested
+                    if let Some(parent) = config
+                        .tickers
                         .iter()
                         .find(|x| x.name == tick_event.symbol.clone())
                     {
