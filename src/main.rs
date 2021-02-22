@@ -138,14 +138,14 @@ fn main() -> Result<(), Error> {
                         .iter()
                         .find(|x| x.name == tick_event.symbol.clone())
                     {
-                        let (average, change) = (
-                            tick_event.average_price.parse::<f32>()?,
+                        let (price, change) = (
+                            tick_event.best_bid.parse::<f32>()?,
                             tick_event.price_change_percent.parse::<f32>()?,
                         );
 
                         let ticker = Ticker {
                             parent: parent.clone(),
-                            average,
+                            average: price,
                             change,
                         };
 
