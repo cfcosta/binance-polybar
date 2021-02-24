@@ -51,9 +51,7 @@ pub struct Ticker {
 
 impl Ticker {
     pub fn average_with_unit(&self) -> String {
-        let avg = if self.average < 0.0001 {
-            format!("{:.6}", self.average)
-        } else if self.average < 0.01 {
+        let avg = if self.average < 0.01 {
             format!("{:.4}", self.average)
         } else {
             format!("{:.2}", self.average)
@@ -67,6 +65,8 @@ impl Ticker {
             format!("${}", avg)
         } else if to.contains("BRL") {
             format!("R${}", avg)
+        } else if to.contains("BTC") && self.average < 0.001 {
+            format!("{} sats", (self.average * 100000000.0).round())
         } else {
             format!("{} {}", avg, to)
         }
