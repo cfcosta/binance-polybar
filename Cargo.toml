@@ -1,5 +1,5 @@
 [package]
-name = "binance-i3status"
+name = "binance-polybar"
 version = "0.1.0"
 authors = ["Cainã Costa <me@cfcosta.com>"]
 edition = "2018"
